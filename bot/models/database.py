@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text, Float
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import relationship, sessionmaker, selectinload
 from sqlalchemy import create_engine
 
 Base = declarative_base()
@@ -34,9 +34,17 @@ class User(Base):
     total_spent = Column(Float, default=0.0)       # Общая потраченная сумма
     last_activity = Column(DateTime, default=datetime.utcnow)
     
-    # Relationships
-    subscriptions = relationship("Subscription", back_populates="user")
-    payments = relationship("Payment", back_populates="user")
+    # Relationships ✅ Добавлено lazy="selectin" для eager loading
+    subscriptions = relationship(
+        "Subscription", 
+        back_populates="user",
+        lazy="selectin"
+    )
+    payments = relationship(
+        "Payment", 
+        back_populates="user",
+        lazy="selectin"
+    )
     referrals = relationship("User", remote_side=[id])
     
     def __repr__(self):
@@ -51,6 +59,7 @@ class User(Base):
     @property
     def active_subscription(self):
         """Get user's active subscription"""
+        #subscriptions уже загружены благодаря lazy="selectin"
         return next((sub for sub in self.subscriptions if sub.is_active and not sub.is_expired), None)
     
     @property
@@ -214,7 +223,7 @@ class DatabaseManager:
     """Database management class"""
     
     def __init__(self, database_url: str):
-        self.engine = create_engine(database_url)
+        self.engine = create_engine(database_url, pool_pre_ping=True)
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
         
     def create_tables(self):
