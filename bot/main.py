@@ -41,9 +41,7 @@ from bot.handlers.main import (
 from bot.handlers.admin import (
     admin_panel,
     admin_callback_handler,
-    handle_broadcast_message,
-    admin_back_to_panel,
-    admin_broadcast_confirm
+    handle_broadcast_message
 )
 from bot.utils.helpers import setup_logging
 from bot.models.database import DatabaseManager
@@ -119,10 +117,8 @@ def create_application() -> Application:
     application.add_handler(CallbackQueryHandler(show_support, pattern='^support$'))
     application.add_handler(CallbackQueryHandler(main_menu, pattern='^main_menu$'))
     
-    # Admin handlers
+    # Admin handlers (all admin callbacks go through admin_callback_handler)
     application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern='^admin_'))
-    application.add_handler(CallbackQueryHandler(admin_back_to_panel, pattern='^admin_back$'))
-    application.add_handler(CallbackQueryHandler(admin_broadcast_confirm, pattern='^admin_broadcast_confirm$'))
     
     # Broadcast message handler (for admins)
     application.add_handler(MessageHandler(

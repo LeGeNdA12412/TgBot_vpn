@@ -24,9 +24,11 @@ class Config:
     CRYPTOMUS_API_KEY = os.getenv('CRYPTOMUS_API_KEY')
     CRYPTOMUS_MERCHANT_ID = os.getenv('CRYPTOMUS_MERCHANT_ID')
     
-    # VPN Settings
-    VPN_SERVER_URL = os.getenv('VPN_SERVER_URL')
-    VPN_API_KEY = os.getenv('VPN_API_KEY')
+    # VPN Settings - Marzban Panel
+    MARZBAN_BASE_URL = os.getenv('MARZBAN_BASE_URL', 'https://panel.legendaryvpn.online:8000/dashboard/')
+    MARZBAN_USERNAME = os.getenv('MARZBAN_USERNAME', 'admin')
+    MARZBAN_PASSWORD = os.getenv('MARZBAN_PASSWORD')
+    MARZBAN_ACCESS_TOKEN = None  # Will be set after login
     
     # Bot Settings
     DEFAULT_LANGUAGE = os.getenv('DEFAULT_LANGUAGE', 'ru')

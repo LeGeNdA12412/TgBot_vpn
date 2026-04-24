@@ -74,8 +74,9 @@ python bot/main.py
 - `QIWI_TOKEN` - QIWI API token
 
 ### VPN Settings
-- `VPN_SERVER_URL` - Your VPN server URL
-- `VPN_API_KEY` - VPN server API key
+- `MARZBAN_BASE_URL` - Your Marzban panel URL (e.g., https://panel.example.com)
+- `MARZBAN_USERNAME` - Marzban admin username
+- `MARZBAN_PASSWORD` - Marzban admin password
 
 ### Pricing (in rubles)
 - `PLAN_1_MONTH_PRICE=299`
@@ -97,20 +98,20 @@ python bot/main.py
 
 ## 🔒 VPN Server Integration
 
-The bot supports various VPN protocols:
+The bot integrates with **Marzban** - a modern VPN management panel that supports multiple protocols:
 
-### WireGuard (Recommended)
-- Fast and modern
-- Easy to configure
-- Good mobile support
+### Supported Protocols
+- **V2Ray/VMess** - Modern and secure
+- **VLESS** - Lightweight V2Ray
+- **Trojan** - Popular protocol
+- **Shadowsocks** - Fast and simple
+- **WireGuard** - High performance
 
-### OpenVPN
-- Widely supported
-- High security
-- More complex setup
-
-### Custom Integration
-Modify `bot/utils/helpers.py` to integrate with your VPN provider's API.
+### Marzban Setup
+1. Install Marzban on your server: https://github.com/Gozargah/Marzban
+2. Configure admin credentials
+3. Set up inbound configurations for different protocols
+4. Update bot configuration with Marzban details
 
 ## 🛠️ Customization
 

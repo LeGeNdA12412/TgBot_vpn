@@ -78,7 +78,8 @@ class Subscription(Base):
     start_date = Column(DateTime, default=datetime.utcnow)
     end_date = Column(DateTime, nullable=False)
     is_active = Column(Boolean, default=True)
-    vpn_config = Column(Text)  # VPN configuration data
+    vpn_config = Text  # Marzban user configuration data (JSON)
+    marzban_username = Column(String(255), unique=True)  # Marzban username
     config_name = Column(String(255))  # Имя конфигурации
     server_location = Column(String(100))  # Локация сервера
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -15,8 +15,12 @@ from bot.utils.helpers import (
     format_datetime, 
     format_date,
     format_time_ago,
-    StatsCalculator
+    StatsCalculator,
+    get_user_vpn_usage,
+    reset_user_data_usage,
+    delete_user_from_vpn
 )
+from bot.utils.marzban_api import marzban_api
 from locales.ru import get_message
 
 logger = logging.getLogger(__name__)
@@ -131,11 +135,14 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(get_message('admin_not_authorized'))
         return
     
-    action = query.data.replace('admin_', '')
+    callback_data = query.data
+    action = callback_data.replace('admin_', '')
     
+    # Main menu handlers
     if action == 'refresh':
         await admin_panel_refresh(update, context)
     elif action == 'users':
+        context.user_data['admin_users_page'] = 0
         await admin_users_list(update, context)
     elif action == 'stats':
         await admin_detailed_stats(update, context)
@@ -149,6 +156,40 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await admin_logs_view(update, context)
     elif action == 'settings':
         await admin_settings(update, context)
+    elif action == 'back':
+        await admin_back_to_panel(update, context)
+    
+    # Pagination handlers
+    elif action.startswith('users_page_'):
+        page_num = int(action.split('_')[-1])
+        context.user_data['admin_users_page'] = page_num
+        await admin_users_list(update, context)
+    
+    # Broadcast handler
+    elif action == 'broadcast_confirm':
+        await admin_broadcast_confirm(update, context)
+    
+    # Marzban management handlers
+    elif action == 'marzban_users':
+        await admin_marzban_users_list(update, context)
+    elif action == 'marzban_usage':
+        await admin_marzban_usage_stats(update, context)
+    elif action == 'marzban_sync':
+        await admin_marzban_sync(update, context)
+    elif action == 'marzban_cleanup':
+        await admin_marzban_cleanup(update, context)
+    
+    # Placeholder handlers for unimplemented features
+    elif action in ['user_search', 'user_stats', 'revenue_chart', 'activity_chart', 
+                    'export_data', 'keys_add', 'keys_list', 'keys_cleanup', 'keys_stats',
+                    'revenue_stats', 'payment_search', 'payment_methods', 'download_logs',
+                    'edit_prices', 'edit_referrals', 'system_settings', 'backup']:
+        await query.edit_message_text(
+            text="🔄 Эта функция еще не реализована. В разработке...",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад в админку", callback_data='admin_back')]
+            ])
+        )
 
 
 async def admin_panel_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -381,47 +422,56 @@ async def admin_detailed_stats(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def admin_keys_management(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Manage VPN keys"""
+    """Manage VPN users via Marzban"""
     query = update.callback_query
     user_id = update.effective_user.id
-    
+
     session = db_manager.get_session()
     try:
-        total_keys = session.query(VPNKey).count()
-        available_keys = session.query(VPNKey).filter(VPNKey.is_used == False).count()
-        used_keys = total_keys - available_keys
-        
-        keys_text = f"🔑 <b>Управление VPN ключами</b>\n\n"
-        keys_text += f"📊 <b>Статистика:</b>\n"
-        keys_text += f"   • Всего ключей: {total_keys}\n"
-        keys_text += f"   • Доступных: {available_keys}\n"
-        keys_text += f"   • Использованных: {used_keys}\n\n"
-        
-        if available_keys < 10:
-            keys_text += "⚠️ <b>Внимание!</b> Мало доступных ключей!\n\n"
-        
+        # Get Marzban system stats
+        system_stats = marzban_api.get_system_stats()
+
+        # Get total users from database (our bot users)
+        total_bot_users = session.query(User).count()
+        active_subscriptions = session.query(Subscription).filter(
+            Subscription.is_active == True,
+            Subscription.end_date > datetime.utcnow()
+        ).count()
+
+        keys_text = f"🔑 <b>Управление VPN пользователями</b>\n\n"
+
+        if system_stats:
+            keys_text += f"📊 <b>Статистика Marzban:</b>\n"
+            keys_text += f"   • Всего пользователей: {system_stats.get('total_users', 'N/A')}\n"
+            keys_text += f"   • Активных: {system_stats.get('active_users', 'N/A')}\n"
+            keys_text += f"   • Использовано трафика: {system_stats.get('total_traffic', 'N/A')} GB\n\n"
+
+        keys_text += f"🤖 <b>Статистика бота:</b>\n"
+        keys_text += f"   • Пользователей бота: {total_bot_users}\n"
+        keys_text += f"   • Активных подписок: {active_subscriptions}\n\n"
+
         keys_text += f"🔄 <b>Обновлено:</b> {format_datetime(datetime.utcnow())}"
-        
+
         keyboard = [
             [
-                InlineKeyboardButton("➕ Добавить ключи", callback_data='admin_keys_add'),
-                InlineKeyboardButton("📋 Список ключей", callback_data='admin_keys_list')
+                InlineKeyboardButton("👥 Список пользователей", callback_data='admin_marzban_users'),
+                InlineKeyboardButton("📊 Статистика использования", callback_data='admin_marzban_usage')
             ],
             [
-                InlineKeyboardButton("🗑️ Очистить использованные", callback_data='admin_keys_cleanup'),
-                InlineKeyboardButton("📊 Статистика по серверам", callback_data='admin_keys_stats')
+                InlineKeyboardButton("🔄 Синхронизировать", callback_data='admin_marzban_sync'),
+                InlineKeyboardButton("🗑️ Очистить неактивных", callback_data='admin_marzban_cleanup')
             ],
             [InlineKeyboardButton("⬅️ Назад в админку", callback_data='admin_back')]
         ]
-        
+
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await query.edit_message_text(
             text=keys_text,
             reply_markup=reply_markup,
             parse_mode='HTML'
         )
-        
+
     finally:
         session.close()
 
@@ -722,3 +772,220 @@ async def admin_back_to_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Show fresh admin panel
     await admin_panel_refresh(update, context)
+
+
+# Marzban management functions
+
+async def admin_marzban_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Marzban users list"""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    # Get users from Marzban
+    users = marzban_api.get_all_users(limit=20)
+
+    if not users:
+        await query.edit_message_text(
+            text="❌ Не удалось получить список пользователей Marzban",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+            ])
+        )
+        return
+
+    users_text = f"👥 <b>Пользователи Marzban</b>\n\n"
+
+    for user in users[:10]:  # Show first 10 users
+        status = user.get('status', 'unknown')
+        status_emoji = {'active': '✅', 'disabled': '❌', 'limited': '⚠️'}.get(status, '❓')
+
+        users_text += f"{status_emoji} <b>{user.get('username', 'N/A')}</b>\n"
+        users_text += f"   📅 Создан: {user.get('created_at', 'N/A')[:10]}\n"
+        users_text += f"   📊 Статус: {status}\n"
+
+        # Get usage info
+        usage = marzban_api.get_user_usage(user.get('username'))
+        if usage:
+            used_traffic = usage.get('used_traffic', 0)
+            users_text += f"   📈 Трафик: {used_traffic} GB\n"
+
+        users_text += "\n"
+
+    users_text += f"📊 Показано {min(len(users), 10)} из {len(users)} пользователей"
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Обновить", callback_data='admin_marzban_users')],
+        [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        text=users_text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+
+
+async def admin_marzban_usage_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Marzban usage statistics"""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    # Get system stats
+    system_stats = marzban_api.get_system_stats()
+
+    if not system_stats:
+        await query.edit_message_text(
+            text="❌ Не удалось получить статистику Marzban",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+            ])
+        )
+        return
+
+    stats_text = f"📊 <b>Статистика использования Marzban</b>\n\n"
+
+    stats_text += f"👥 <b>Пользователи:</b>\n"
+    stats_text += f"   • Всего: {system_stats.get('total_users', 'N/A')}\n"
+    stats_text += f"   • Активных: {system_stats.get('active_users', 'N/A')}\n\n"
+
+    stats_text += f"📈 <b>Трафик:</b>\n"
+    stats_text += f"   • Общий: {system_stats.get('total_traffic', 'N/A')} GB\n"
+    stats_text += f"   • Сегодня: {system_stats.get('today_traffic', 'N/A')} GB\n\n"
+
+    stats_text += f"🔄 <b>Обновлено:</b> {format_datetime(datetime.utcnow())}"
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Обновить", callback_data='admin_marzban_usage')],
+        [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        text=stats_text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+
+
+async def admin_marzban_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sync bot subscriptions with Marzban"""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    await query.edit_message_text("🔄 Синхронизация с Marzban...")
+
+    session = db_manager.get_session()
+    try:
+        # Get active subscriptions
+        active_subs = session.query(Subscription).filter(
+            Subscription.is_active == True,
+            Subscription.end_date > datetime.utcnow(),
+            Subscription.marzban_username.isnot(None)
+        ).all()
+
+        synced = 0
+        failed = 0
+
+        for sub in active_subs:
+            # Check if user exists in Marzban
+            marzban_user = marzban_api.get_user(sub.marzban_username)
+
+            if marzban_user:
+                # Update expiration if needed
+                current_expire = marzban_user.get('expire')
+                if current_expire:
+                    marzban_expire = datetime.fromtimestamp(current_expire)
+                    if marzban_expire != sub.end_date:
+                        # Sync expiration date
+                        if marzban_api.update_user(sub.marzban_username, expire_date=sub.end_date):
+                            synced += 1
+                        else:
+                            failed += 1
+                    else:
+                        synced += 1
+                else:
+                    failed += 1
+            else:
+                # User doesn't exist in Marzban, recreate
+                logger.warning(f"User {sub.marzban_username} not found in Marzban, skipping")
+                failed += 1
+
+        result_text = f"✅ <b>Синхронизация завершена</b>\n\n"
+        result_text += f"📊 Результаты:\n"
+        result_text += f"   • Синхронизировано: {synced}\n"
+        result_text += f"   • Ошибок: {failed}\n\n"
+        result_text += f"🔄 <b>Обновлено:</b> {format_datetime(datetime.utcnow())}"
+
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text=result_text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+
+        log_admin_action(user_id, "marzban_sync", details=f"Synced {synced} users, {failed} failed")
+
+    finally:
+        session.close()
+
+
+async def admin_marzban_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clean up expired users from Marzban"""
+    query = update.callback_query
+    user_id = update.effective_user.id
+
+    await query.edit_message_text("🗑️ Очистка неактивных пользователей...")
+
+    session = db_manager.get_session()
+    try:
+        # Get expired subscriptions
+        expired_subs = session.query(Subscription).filter(
+            Subscription.is_active == True,
+            Subscription.end_date <= datetime.utcnow(),
+            Subscription.marzban_username.isnot(None)
+        ).all()
+
+        cleaned = 0
+        failed = 0
+
+        for sub in expired_subs:
+            # Disable user in Marzban
+            if marzban_api.update_user(sub.marzban_username, status='disabled'):
+                # Mark subscription as inactive
+                sub.is_active = False
+                cleaned += 1
+            else:
+                failed += 1
+
+        session.commit()
+
+        result_text = f"✅ <b>Очистка завершена</b>\n\n"
+        result_text += f"📊 Результаты:\n"
+        result_text += f"   • Деактивировано: {cleaned}\n"
+        result_text += f"   • Ошибок: {failed}\n\n"
+        result_text += f"🔄 <b>Обновлено:</b> {format_datetime(datetime.utcnow())}"
+
+        keyboard = [
+            [InlineKeyboardButton("⬅️ Назад", callback_data='admin_keys')]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text=result_text,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+
+        log_admin_action(user_id, "marzban_cleanup", details=f"Cleaned {cleaned} users, {failed} failed")
+
+    finally:
+        session.close()

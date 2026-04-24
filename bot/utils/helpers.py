@@ -1,4 +1,4 @@
-"""Utility functions for VPN Bot"""
+"""Utility functions for VPN Bot with Marzban integration"""
 
 import string
 import random
@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any
 import qrcode
 from io import BytesIO
 import base64
+
+from bot.utils.marzban_api import marzban_api
 
 logger = logging.getLogger(__name__)
 
@@ -55,57 +57,106 @@ def generate_referral_code(length: int = 8) -> str:
     return ''.join(random.choice(chars) for _ in range(length))
 
 
-def generate_vpn_config(user_id: int, server_location: str = "Netherlands") -> str:
-    """Generate VPN configuration for user"""
-    # Generate unique keys for user
-    private_key = generate_private_key()
-    public_key = generate_public_key(private_key)
-    
-    # Assign unique IP address
-    ip_suffix = (user_id % 254) + 1
-    client_ip = f"10.0.0.{ip_suffix}/32"
-    
-    config_template = f"""[Interface]
-PrivateKey = {private_key}
-Address = {client_ip}
-DNS = 1.1.1.1, 8.8.8.8
-MTU = 1420
+def generate_vpn_config(user_id: int, plan_type: str = "1_month", server_location: str = "default") -> Optional[Dict[str, Any]]:
+    """Generate VPN configuration using Marzban API"""
+    try:
+        # Generate unique username for Marzban
+        username = f"user_{user_id}_{plan_type}_{int(datetime.utcnow().timestamp())}"
 
-[Peer]
-PublicKey = SERVER_PUBLIC_KEY_PLACEHOLDER
-Endpoint = {get_server_endpoint(server_location)}
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-"""
-    return config_template
+        # Calculate subscription end date
+        end_date = calculate_end_date(plan_type)
+
+        # Create user in Marzban
+        user_data = marzban_api.create_user(
+            username=username,
+            data_limit=0,  # Unlimited data
+            expire_date=end_date
+        )
+
+        if not user_data:
+            logger.error(f"Failed to create Marzban user for user_id {user_id}")
+            return None
+
+        # Get user configuration
+        config_data = marzban_api.get_user_config(username)
+
+        if not config_data:
+            logger.error(f"Failed to get config for Marzban user {username}")
+            return None
+
+        return {
+            'username': username,
+            'config_data': config_data,
+            'end_date': end_date,
+            'server_location': server_location
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating VPN config for user {user_id}: {e}")
+        return None
 
 
-def generate_private_key() -> str:
-    """Generate WireGuard private key (simplified for demo)"""
-    # In production, use proper WireGuard key generation
-    key_bytes = os.urandom(32)
-    return base64.b64encode(key_bytes).decode('utf-8')
+def get_user_vpn_config(username: str) -> Optional[Dict[str, Any]]:
+    """Get user's VPN configuration from Marzban"""
+    try:
+        return marzban_api.get_user_config(username)
+    except Exception as e:
+        logger.error(f"Error getting VPN config for user {username}: {e}")
+        return None
 
 
-def generate_public_key(private_key: str) -> str:
-    """Generate public key from private key (simplified for demo)"""
-    # In production, use proper WireGuard key derivation
-    hash_obj = hashlib.sha256(private_key.encode())
-    key_bytes = hash_obj.digest()
-    return base64.b64encode(key_bytes).decode('utf-8')
+def extend_user_subscription(username: str, new_end_date: datetime) -> bool:
+    """Extend user subscription in Marzban"""
+    try:
+        return marzban_api.update_user(username=username, expire_date=new_end_date)
+    except Exception as e:
+        logger.error(f"Error extending subscription for user {username}: {e}")
+        return False
 
 
-def get_server_endpoint(location: str) -> str:
-    """Get server endpoint for location"""
-    servers = {
-        "Netherlands": "nl.vpnserver.com:51820",
-        "Germany": "de.vpnserver.com:51820",
-        "France": "fr.vpnserver.com:51820",
-        "United States": "us.vpnserver.com:51820",
-        "Japan": "jp.vpnserver.com:51820",
-        "Singapore": "sg.vpnserver.com:51820"
-    }
-    return servers.get(location, "nl.vpnserver.com:51820")
+def deactivate_user_subscription(username: str) -> bool:
+    """Deactivate user subscription in Marzban"""
+    try:
+        return marzban_api.update_user(username=username, status='disabled')
+    except Exception as e:
+        logger.error(f"Error deactivating subscription for user {username}: {e}")
+        return False
+
+
+def reactivate_user_subscription(username: str, new_end_date: Optional[datetime] = None) -> bool:
+    """Reactivate user subscription in Marzban"""
+    try:
+        return marzban_api.update_user(username=username, status='active', expire_date=new_end_date)
+    except Exception as e:
+        logger.error(f"Error reactivating subscription for user {username}: {e}")
+        return False
+
+
+def delete_user_from_vpn(username: str) -> bool:
+    """Delete user from Marzban"""
+    try:
+        return marzban_api.delete_user(username)
+    except Exception as e:
+        logger.error(f"Error deleting user {username} from VPN: {e}")
+        return False
+
+
+def get_user_vpn_usage(username: str) -> Optional[Dict[str, Any]]:
+    """Get user's VPN usage statistics"""
+    try:
+        return marzban_api.get_user_usage(username)
+    except Exception as e:
+        logger.error(f"Error getting usage for user {username}: {e}")
+        return None
+
+
+def reset_user_data_usage(username: str) -> bool:
+    """Reset user's data usage in Marzban"""
+    try:
+        return marzban_api.reset_user_data_usage(username)
+    except Exception as e:
+        logger.error(f"Error resetting data usage for user {username}: {e}")
+        return False
 
 
 def create_qr_code(data: str) -> BytesIO:
@@ -118,12 +169,61 @@ def create_qr_code(data: str) -> BytesIO:
     )
     qr.add_data(data)
     qr.make(fit=True)
-    
+
     img = qr.make_image(fill_color="black", back_color="white")
     img_buffer = BytesIO()
     img.save(img_buffer, format='PNG')
     img_buffer.seek(0)
     return img_buffer
+
+
+def format_marzban_config(config_data: Dict[str, Any], protocol: str = 'vless') -> str:
+    """Format Marzban configuration for display"""
+    try:
+        if protocol not in config_data:
+            # Return first available protocol
+            protocol = list(config_data.keys())[0]
+
+        protocol_config = config_data[protocol]
+
+        if protocol == 'vless':
+            # VLESS format
+            return f"""vless://{protocol_config.get('id', '')}@{protocol_config.get('server', '')}:{protocol_config.get('port', 443)}?type={protocol_config.get('type', 'tcp')}&security={protocol_config.get('security', 'tls')}&pbk={protocol_config.get('pbk', '')}&fp={protocol_config.get('fp', 'random')}&sni={protocol_config.get('sni', '')}&sid={protocol_config.get('sid', '')}&spx={protocol_config.get('spx', '')}#{protocol_config.get('server', 'VPN')}"""
+
+        elif protocol == 'vmess':
+            # VMess format
+            vmess_config = {
+                "v": "2",
+                "ps": protocol_config.get('server', 'VPN'),
+                "add": protocol_config.get('server', ''),
+                "port": str(protocol_config.get('port', 443)),
+                "id": protocol_config.get('id', ''),
+                "aid": "0",
+                "net": protocol_config.get('type', 'tcp'),
+                "type": "none",
+                "host": protocol_config.get('host', ''),
+                "path": protocol_config.get('path', ''),
+                "tls": "tls" if protocol_config.get('security') == 'tls' else ""
+            }
+            import base64
+            return f"vmess://{base64.b64encode(json.dumps(vmess_config).encode()).decode()}"
+
+        elif protocol == 'trojan':
+            # Trojan format
+            return f"""trojan://{protocol_config.get('password', '')}@{protocol_config.get('server', '')}:{protocol_config.get('port', 443)}?type={protocol_config.get('type', 'tcp')}&security={protocol_config.get('security', 'tls')}&fp={protocol_config.get('fp', 'random')}&sni={protocol_config.get('sni', '')}#{protocol_config.get('server', 'VPN')}"""
+
+        elif protocol == 'shadowsocks':
+            # Shadowsocks format
+            import base64
+            ss_config = f"{protocol_config.get('method', 'chacha20-ietf-poly1305')}:{protocol_config.get('password', '')}"
+            encoded = base64.b64encode(ss_config.encode()).decode()
+            return f"ss://{encoded}@{protocol_config.get('server', '')}:{protocol_config.get('port', 443)}#{protocol_config.get('server', 'VPN')}"
+
+        return json.dumps(protocol_config, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error formatting Marzban config: {e}")
+        return json.dumps(config_data, indent=2)
 
 
 def format_datetime(dt: datetime) -> str:

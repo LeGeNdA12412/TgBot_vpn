@@ -2,6 +2,7 @@
 
 import logging
 import traceback
+import json
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
@@ -25,7 +26,10 @@ from bot.utils.helpers import (
     get_random_server_location,
     generate_config_filename,
     calculate_referral_bonus,
-    format_currency
+    format_currency,
+    format_marzban_config,
+    get_user_vpn_config,
+    is_admin
 )
 from bot.utils.payments import payment_manager, PaymentError
 from locales.ru import get_message, format_price_per_month, format_savings
@@ -227,7 +231,6 @@ async def select_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
 async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Process payment"""
     query = update.callback_query
-    await query.answer("💳 Создаем счет для оплаты...")
     
     payment_method = query.data.replace('pay_', '')
     plan_type = context.user_data.get('selected_plan')
@@ -246,6 +249,101 @@ async def process_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not user:
             await query.edit_message_text("❌ Пользователь не найден")
             return ConversationHandler.END
+        
+        # Check if user is admin - skip payment for admins
+        user_is_admin = is_admin(update.effective_user.id)
+        
+        if user_is_admin:
+            # Admin gets VPN for free - create payment as completed
+            await query.answer("🔓 Админ-режим: активируем VPN бесплатно...")
+            
+            payment = Payment(
+                user_id=user.id,
+                amount=plan['price'] * 100,
+                plan_type=plan_type,
+                payment_method='admin_free',
+                status='completed',
+                completed_at=datetime.utcnow(),
+                expires_at=datetime.utcnow() + timedelta(days=plan['duration_days'])
+            )
+            session.add(payment)
+            session.commit()
+            
+            # Create subscription directly (like in verify_payment)
+            # Wrap in try-except to prevent bot crash
+            try:
+                vpn_data = generate_vpn_config(user.telegram_id, plan_type, "default")
+            except Exception as e:
+                logger.error(f"Error generating VPN config for admin: {e}")
+                vpn_data = None
+            
+            if not vpn_data:
+                logger.error(f"Failed to create VPN config for admin {user.telegram_id}")
+                await query.edit_message_text(
+                    "❌ Ошибка создания VPN конфигурации.\n\n"
+                    "Проверьте подключение к Marzban панели и попробуйте снова.",
+                    parse_mode='HTML'
+                )
+                return ConversationHandler.END
+            
+            # Deactivate old subscriptions
+            old_subs = session.query(Subscription).filter_by(
+                user_id=user.id,
+                is_active=True
+            ).all()
+            for sub in old_subs:
+                sub.is_active = False
+            
+            subscription = Subscription(
+                user_id=user.id,
+                plan_type=plan_type,
+                end_date=vpn_data['end_date'],
+                vpn_config=json.dumps(vpn_data['config_data']),
+                marzban_username=vpn_data['username'],
+                config_name=f"VPN_{plan['name']}",
+                server_location=vpn_data['server_location']
+            )
+            session.add(subscription)
+            session.commit()
+            
+            # Success message
+            success_message = get_message('payment_success',
+                plan_name=plan['name'],
+                end_date=format_date(subscription.end_date),
+                server_location=f"{get_server_flag(vpn_data['server_location'])} {vpn_data['server_location']}"
+            )
+            
+            await query.edit_message_text(
+                f"🎉 <b>Админ-активация!</b>\n\n✅ VPN подписка активирована БЕСПЛАТНО!\n\n" + 
+                success_message.replace("🎉 Поздравляем! Оплата прошла успешно!", ""),
+                parse_mode='HTML'
+            )
+            
+            # Send config file
+            config_filename = generate_config_filename(user.telegram_id, plan_type)
+            config_file = create_config_file(subscription.vpn_config, config_filename)
+            
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id,
+                document=config_file,
+                filename=config_filename,
+                caption=get_message('vpn_config_info'),
+                parse_mode='HTML'
+            )
+            
+            # Send QR code
+            qr_buffer = create_qr_code(subscription.vpn_config)
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=qr_buffer,
+                caption=get_message('config_qr'),
+                parse_mode='HTML'
+            )
+            
+            return ConversationHandler.END
+        
+        # Regular user - normal payment flow
+        await query.answer("💳 Создаем счет для оплаты...")
         
         payment = Payment(
             user_id=user.id,
@@ -346,15 +444,22 @@ async def verify_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for sub in old_subs:
                 sub.is_active = False
             
-            # Create new subscription
-            server_location = get_random_server_location()
+            # Create new subscription with Marzban
+            vpn_data = generate_vpn_config(user.telegram_id, payment.plan_type, "default")
+
+            if not vpn_data:
+                logger.error(f"Failed to create VPN config for user {user.telegram_id}")
+                await query.edit_message_text(get_message('payment_error_vpn'))
+                return
+
             subscription = Subscription(
                 user_id=payment.user_id,
                 plan_type=payment.plan_type,
-                end_date=calculate_end_date(payment.plan_type),
-                vpn_config=generate_vpn_config(user.telegram_id, server_location),
+                end_date=vpn_data['end_date'],
+                vpn_config=json.dumps(vpn_data['config_data']),  # Store as JSON
+                marzban_username=vpn_data['username'],  # Store Marzban username
                 config_name=f"VPN_{SUBSCRIPTION_PLANS[payment.plan_type]['name']}",
-                server_location=server_location
+                server_location=vpn_data['server_location']
             )
             session.add(subscription)
             
@@ -547,22 +652,57 @@ async def show_my_config(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode='HTML'
         )
         
-        config_filename = generate_config_filename(user.telegram_id, active_sub.plan_type)
-        config_file = create_config_file(active_sub.vpn_config, config_filename)
+        # Parse Marzban config data
+        try:
+            config_data = json.loads(active_sub.vpn_config)
+        except (json.JSONDecodeError, TypeError):
+            # Fallback for old format
+            config_data = get_user_vpn_config(active_sub.marzban_username) or {}
         
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=config_file,
-            filename=config_filename,
-            caption=f"📱 Конфигурация VPN\n🌍 Сервер: {get_server_flag(active_sub.server_location)} {active_sub.server_location}",
-            parse_mode='HTML'
-        )
+        # Send different protocol configs
+        protocols = ['vless', 'vmess', 'trojan', 'shadowsocks']
+        sent_configs = 0
         
-        qr_buffer = create_qr_code(active_sub.vpn_config)
-        await context.bot.send_photo(
+        for protocol in protocols:
+            if protocol in config_data and sent_configs < 2:  # Limit to 2 configs to avoid spam
+                config_text = format_marzban_config(config_data, protocol)
+                
+                # Send as text file
+                config_filename = f"vpn_{protocol}_{active_sub.plan_type}.txt"
+                config_file = create_config_file(config_text, config_filename)
+                
+                await context.bot.send_document(
+                    chat_id=update.effective_chat.id,
+                    document=config_file,
+                    filename=config_filename,
+                    caption=f"🔗 Конфигурация {protocol.upper()}\n🌍 Сервер: {active_sub.server_location}\n⏰ До: {format_date(active_sub.end_date)}",
+                    parse_mode='HTML'
+                )
+                
+                # Send QR code for the config
+                qr_buffer = create_qr_code(config_text)
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=qr_buffer,
+                    caption=f"📱 QR код для {protocol.upper()}",
+                    parse_mode='HTML'
+                )
+                
+                sent_configs += 1
+        
+        # Send subscription info
+        usage_info = get_user_vpn_usage(active_sub.marzban_username)
+        usage_text = ""
+        if usage_info:
+            usage_text = f"\n📊 Использовано: {usage_info.get('used_traffic', 'N/A')} GB"
+        
+        await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            photo=qr_buffer,
-            caption=get_message('config_qr'),
+            text=f"✅ <b>Ваша подписка активна!</b>\n\n"
+                 f"📦 План: {SUBSCRIPTION_PLANS[active_sub.plan_type]['name']}\n"
+                 f"⏰ Истекает: {format_date(active_sub.end_date)}\n"
+                 f"🌍 Сервер: {active_sub.server_location}{usage_text}\n\n"
+                 f"🔄 Конфигурации отправлены выше",
             parse_mode='HTML'
         )
         

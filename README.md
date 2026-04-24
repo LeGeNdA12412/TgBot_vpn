@@ -29,6 +29,8 @@
 - **Мониторинг платежей** - отчеты по всем транзакциям
 
 ### 🛡️ Безопасность и надежность
+- **Интеграция с Marzban** - современная VPN панель
+- **Множество протоколов** - V2Ray, Trojan, Shadowsocks, WireGuard
 - **Защита от SQL-инъекций** - SQLAlchemy ORM
 - **Валидация данных** - проверка всех пользовательских входов
 - **Обработка ошибок** - graceful handling всех исключений
@@ -95,8 +97,9 @@ CRYPTOMUS_API_KEY=your_cryptomus_key
 CRYPTOMUS_MERCHANT_ID=your_merchant_id
 
 # VPN Configuration
-VPN_SERVER_URL=your_vpn_server.com
-VPN_API_KEY=your_vpn_api_key
+MARZBAN_BASE_URL=https://your-marzban-panel.com
+MARZBAN_USERNAME=admin
+MARZBAN_PASSWORD=your_marzban_password
 
 # Bot Configuration
 DEFAULT_LANGUAGE=ru
