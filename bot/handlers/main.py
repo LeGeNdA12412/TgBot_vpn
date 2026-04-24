@@ -189,7 +189,7 @@ async def select_payment_method(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
     
-    plan_type = query.data.replace('plan_', '')
+    plan_type = query.data.replace('plan_', '')   # 'plan_1_month' -> '1_month'
     context.user_data['selected_plan'] = plan_type
     
     plan = SUBSCRIPTION_PLANS.get(plan_type)

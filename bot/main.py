@@ -96,6 +96,7 @@ def create_application() -> Application:
             ],
             WAITING_PAYMENT: [
                 CallbackQueryHandler(verify_payment, pattern='^verify_payment_'),
+                CallbackQueryHandler(select_payment_method, pattern='^plan_'),   # ✅ Новая строка
                 CallbackQueryHandler(main_menu, pattern='^main_menu$')
             ]
         },
